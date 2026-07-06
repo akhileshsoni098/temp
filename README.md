@@ -39,11 +39,25 @@ Matlab **pure `src/modules/` mein ek bhi entity in teeno base classes ko `extend
 
 Uske baad maine in specific entity files ko individually khol ke line-by-line padha (`permission.entity.ts`, `module.entity.ts`, `submodule.entity.ts`, `role-permission.entity.ts`, `user-permission.entity.ts`, `user-session.entity.ts`, `login-challenge.entity.ts`, `login-otp.entity.ts`, `pending-invite.entity.ts`, `activity-log.entity.ts`, `treaty-state.entity.ts`, `treaty-mga.entity.ts`, `treaty-reinsurer.entity.ts`, `journal-entry.entity.ts`) — har ek apne columns **manually** `@Column(...)` decorator se declare karti hai (koi base class extend nahi karti), aur in sab mein `is_deleted`/`deleted_at`/`deleted_by` genuinely **declare hi nahi kiya gaya**.
 
-**Matlab jo diff maine pehle likha tha wo sahi hai** — ye tables sach mein soft-delete columns ke bina hain DB mein. Confusion sirf itna tha ki `SoftDeleteEntity` file dekh ke aisa lag raha tha "ye toh sab tables mein hoga hi" — lekin asal mein wo class kisi bhi entity ke through actually use hi nahi ho rahi. Developer ne shayad ye base classes banaye the future consistency ke liye, par baad mein har entity manually likhi gayi aur kayi jagah soft-delete columns add karna reh gaya.
+**Teesra level ka proof — seedha migration files (jo actual DB banati hain) khol ke dekha:**
+
+1. `src/database/migrations/1783223589374-InitialSchema.ts` ka raw `CREATE TABLE` SQL statement har ek table ke liye dekha. Jaise:
+   ```sql
+   CREATE TABLE "permissions" ("id" uuid ..., "action" character varying ..., "label" character varying ..., "description" character varying, CONSTRAINT ... PRIMARY KEY ("id"))
+   ```
+   Isme `is_deleted` column hai hi nahi. Same tarah `submodules`, `modules`, `user_permissions`, `pending_invites`, `role_permissions`, `treaty_states`, `treaty_mgas`, `treaty_reinsurers`, `journal_entries`, `user_sessions`, `login_otps`, `login_challenges`, `activity_logs` — in sabke `CREATE TABLE` statements mein bhi `is_deleted`/`deleted_at`/`deleted_by` kahin nahi hai.
+
+2. Ek baad ki migration `src/database/migrations/1783225145073-AddSoftDeleteColumns.ts` hai jiska poora kaam hi ye hai ki purani tables mein `ALTER TABLE ... ADD "is_deleted"` chala ke soft-delete columns add kare — **par ye sirf 12 specific tables pe chalti hai**: `roles`, `mga_master`, `reinsurer_companies`, `lines_of_business`, `cob_master`, `state_master`, `treaties`, `state_documents`, `mga_documents`, `chart_of_accounts`, `gl_mappings`, `chart_of_account_documents`. Flagged 14 tables mein se **ek bhi is list mein nahi hai**.
+
+3. Teesri migration `1783226000000-AddMissingModules.ts` sirf `modules` table mein seed data insert karti hai (`INSERT INTO "modules" ...`), koi column add nahi karti.
+
+**Matlab confirm ho gaya — DB level pe bhi, entity code level pe bhi**: `permissions`, `modules`, `submodules`, `role_permissions`, `user_permissions`, `user_sessions`, `login_challenges`, `login_otps`, `pending_invites`, `activity_logs`, `treaty_states`, `treaty_mgas`, `treaty_reinsurers`, `journal_entries` — in 14 tables mein `is_deleted`/`deleted_at`/`deleted_by` column **kabhi bana hi nahi**, na entity mein na actual Postgres table mein. `soft-delete.entity.ts` in tables se **bilkul connected nahi hai** — na `extends` ke through, na kisi migration ke through.
+
+**Toh project mein `is_deleted` "achieve" kaise ho raha hai (jin tables mein hai unmein)?** `SoftDeleteEntity` base class ko inherit karke **nahi** — har entity file mein manually, alag-alag, copy-paste karke `@Column({ name: 'is_deleted', type: 'boolean', default: false }) isDeleted: boolean;` likha gaya hai, aur DB side pe bhi corresponding manual `ALTER TABLE` migration chalayi gayi. `src/common/entities/base.entity.ts` / `auditable.entity.ts` / `soft-delete.entity.ts` — teeno files ban toh chuki hain (shayad future mein consistency ke liye plan tha), par **poora codebase inhe completely ignore karta hai** — har entity independently, column-by-column manually likhi gayi hai. Isliye ye teeno base classes practically **dead code** hain.
 
 **Practical takeaway**: agar aap chahte ho ki `permissions`, `modules`, `submodules`, `role_permissions`, `user_permissions`, `user_sessions`, `login_challenges`, `login_otps`, `pending_invites`, `activity_logs`, `treaty_states`, `treaty_mgas`, `treaty_reinsurers`, `journal_entries` — in sab mein bhi soft-delete ho, toh do options hain:
-1. Inhe manually `is_deleted`/`deleted_at`/`deleted_by` columns add karo (jaisa baaki tables mein hai), YA
-2. In entities ko actually `extends SoftDeleteEntity` karo taaki wo already-likha hua base class finally kaam mein aaye (isse migration bhi generate karni padegi kyunki columns naye add honge).
+1. Har entity mein manually `is_deleted`/`deleted_at`/`deleted_by` columns add karo (jaisa baaki tables mein pattern hai) + ek naya migration likho jo in 14 tables pe `ALTER TABLE ... ADD` chalaye, YA
+2. In entities ko actually `extends SoftDeleteEntity` karo taaki wo already-likha hua base class finally kaam mein aaye — is case mein bhi migration generate karni padegi kyunki DB mein columns abhi hain hi nahi, sirf entity class change karne se DB apne aap nahi badlega.
 
 ---
 
