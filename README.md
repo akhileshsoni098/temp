@@ -1,32 +1,65 @@
 # Schema Diff: `database-schema.dbml` (actual project) vs `diagram.dbml` (final/target design)
 
-**database-schema.dbml** = reverse-engineered from the real TypeORM entities in `src/modules/**/entities/*.entity.ts` — this is what is **actually running in the codebase today**.
+**database-schema.dbml** = `src/modules/**/entities/*.entity.ts` ke real TypeORM entities se banaya gaya hai — yehi cheez **abhi codebase mein actually chal rahi hai**.
 
-**diagram.dbml** = a separate, redesigned "final merged" schema (per its own header, sourced from `finaldb.sql`) — this looks like a **target/future schema**, not what's implemented yet. Several tables in it are intentionally restructured versions of the current tables.
+**diagram.dbml** = ek alag, redesign kiya hua "final merged" schema hai (uske apne header ke hisaab se `finaldb.sql` se aaya hai) — ye ek **target/future schema** lagta hai, jo abhi tak implement nahi hua. Isme kayi tables jaan-boojh kar restructure kiye gaye hain current tables ke.
 
-Use this file to see, module by module: which tables/fields exist **only in the project** (implemented but not in the target diagram), which exist **only in the diagram** (designed but not yet built), and which fields were **renamed/changed** between the two.
+Is file ka use karo ye dekhne ke liye, module-wise: kaunse tables/fields **sirf project mein** hain (implement ho chuke hain par target diagram mein nahi), kaunse **sirf diagram mein** hain (design ho chuke hain par abhi bane nahi), aur kaunse fields **rename/change** hue hain dono ke beech.
 
-Labels used below:
-- **EXTRA IN PROJECT** — field/table is in the running code but NOT in `diagram.dbml`
-- **MISSING IN PROJECT** — field/table is in `diagram.dbml` but NOT implemented in code yet
-- **RENAMED/CHANGED** — same concept, different column name, type, or constraint
-- **REDESIGNED** — the table exists in both but the shape is different enough that it's effectively a different table
+Labels jo neeche use kiye hain:
+- **PROJECT MEIN EXTRA** — field/table running code mein hai but `diagram.dbml` mein nahi
+- **PROJECT MEIN MISSING** — field/table `diagram.dbml` mein hai but code mein abhi tak implement nahi hua
+- **RENAME/CHANGE HUA** — same concept hai, bas column ka naam, type, ya constraint alag hai
+- **PURA REDESIGN** — table dono jagah hai lekin shape itni alag hai ki practically ye do alag tables hain
 
 ---
 
-## 0. Whole-table differences
+## IMPORTANT CLARIFICATION — `SoftDeleteEntity` / `AuditableEntity` / `BaseEntity` wala confusion
 
-### Tables that exist ONLY in the project (`database-schema.dbml`) — not in `diagram.dbml` at all
-| Table | Module | Notes |
+Aapne `src/common/entities/soft-delete.entity.ts` select kiya tha jisme ye dikh raha hai:
+
+```ts
+export abstract class SoftDeleteEntity extends AuditableEntity {
+  @Column({ name: 'is_deleted', ... }) isDeleted: boolean;
+  @Column({ name: 'deleted_at', ... }) deletedAt: Date;
+  @Column({ name: 'deleted_by', ... }) deletedBy: string;
+}
+```
+
+Aur sawaal ye tha: jab ye class already `is_deleted/deleted_at/deleted_by` define kar rahi hai, toh diff mein kuch tables ke saamne "MISSING" kyun likha hai?
+
+**Maine deeply verify kiya hai — direct har entity file khol ke, sirf summary pe trust nahi kiya.** Pehle ek grep chalaya:
+
+```
+grep "extends (SoftDeleteEntity|AuditableEntity|BaseEntity)" src/modules/**/*.entity.ts
+→ No matches found
+```
+
+Matlab **pure `src/modules/` mein ek bhi entity in teeno base classes ko `extends` nahi karti.** `BaseEntity`, `AuditableEntity`, `SoftDeleteEntity` — teeno abstract classes `src/common/entities/` mein defined toh hain, par **inherit kahin nahi ho rahe — ye dead/unused code hai.**
+
+Uske baad maine in specific entity files ko individually khol ke line-by-line padha (`permission.entity.ts`, `module.entity.ts`, `submodule.entity.ts`, `role-permission.entity.ts`, `user-permission.entity.ts`, `user-session.entity.ts`, `login-challenge.entity.ts`, `login-otp.entity.ts`, `pending-invite.entity.ts`, `activity-log.entity.ts`, `treaty-state.entity.ts`, `treaty-mga.entity.ts`, `treaty-reinsurer.entity.ts`, `journal-entry.entity.ts`) — har ek apne columns **manually** `@Column(...)` decorator se declare karti hai (koi base class extend nahi karti), aur in sab mein `is_deleted`/`deleted_at`/`deleted_by` genuinely **declare hi nahi kiya gaya**.
+
+**Matlab jo diff maine pehle likha tha wo sahi hai** — ye tables sach mein soft-delete columns ke bina hain DB mein. Confusion sirf itna tha ki `SoftDeleteEntity` file dekh ke aisa lag raha tha "ye toh sab tables mein hoga hi" — lekin asal mein wo class kisi bhi entity ke through actually use hi nahi ho rahi. Developer ne shayad ye base classes banaye the future consistency ke liye, par baad mein har entity manually likhi gayi aur kayi jagah soft-delete columns add karna reh gaya.
+
+**Practical takeaway**: agar aap chahte ho ki `permissions`, `modules`, `submodules`, `role_permissions`, `user_permissions`, `user_sessions`, `login_challenges`, `login_otps`, `pending_invites`, `activity_logs`, `treaty_states`, `treaty_mgas`, `treaty_reinsurers`, `journal_entries` — in sab mein bhi soft-delete ho, toh do options hain:
+1. Inhe manually `is_deleted`/`deleted_at`/`deleted_by` columns add karo (jaisa baaki tables mein hai), YA
+2. In entities ko actually `extends SoftDeleteEntity` karo taaki wo already-likha hua base class finally kaam mein aaye (isse migration bhi generate karni padegi kyunki columns naye add honge).
+
+---
+
+## 0. Poore table-level differences
+
+### Sirf project mein hain (`database-schema.dbml`) — `diagram.dbml` mein bilkul nahi
+| Table | Module | Note |
 |---|---|---|
-| `locked_periods` | masters | Controls whether an accounting period is editable. No equivalent anywhere in `diagram.dbml`. |
-| `treaty_lobs` | masters | Junction: treaty ↔ line of business. `diagram.dbml` replaced this whole concept with `treaty_products` (treaty ↔ product, where a product already bundles LOB+COB). |
-| `treaty_lob_cobs` | masters | Second-level junction: treaty_lob ↔ class of business. Same reason as above — removed in favor of `treaty_products`. |
+| `locked_periods` | masters | Accounting period editable hai ya nahi, ye control karta hai. `diagram.dbml` mein iska koi equivalent hi nahi hai. |
+| `treaty_lobs` | masters | Junction: treaty ↔ line of business. `diagram.dbml` ne ye poora concept `treaty_products` se replace kar diya (treaty ↔ product, jisme product already LOB+COB dono bundle karta hai). |
+| `treaty_lob_cobs` | masters | Doosra-level junction: treaty_lob ↔ class of business. Same reason — `treaty_products` ke favor mein hata diya gaya. |
 
-### Tables that exist ONLY in `diagram.dbml` — not implemented in the project
-None. Every table in `diagram.dbml` has a same-named counterpart already implemented in the project (though several are reshaped — see below).
+### Sirf `diagram.dbml` mein hain — project mein implement nahi
+Koi nahi. `diagram.dbml` ke har table ka same-naam wala counterpart project mein pehle se implement hai (par kayi reshape/redesign kiye gaye hain — neeche dekho).
 
-### Table counts
+### Table count
 - `database-schema.dbml` (project, actual): **53 tables**
 - `diagram.dbml` (target design): **50 tables**
 
@@ -35,47 +68,47 @@ None. Every table in `diagram.dbml` has a same-named counterpart already impleme
 ## GROUP 1: Auth & RBAC
 *(project modules: `users`, `roles`, `permissions`, `auth`, `activity-logs`)*
 
-### `roles` — no differences
-Identical field set in both files.
+### `roles` — koi farak nahi
+Dono files mein fields exactly same hain.
 
 ### `users` — CHANGED
-- **MISSING IN PROJECT**: `team_id` — diagram note says it's a placeholder for future team assignment, always NULL, no FK/table exists yet anyway, so nothing to actually build.
-- **EXTRA IN PROJECT**: `user_entity_type`, `user_entity_id` — polymorphic link from a user to an MGA/broker/customer entity. Diagram's note explicitly says these were **removed** because "Southlake is internal-only... access is controlled purely by role/permissions." The project still actively uses these two columns.
+- **PROJECT MEIN MISSING**: `team_id` — diagram ka note kehta hai ye future team-assignment ke liye placeholder hai, hamesha NULL rehta hai, na koi teams table hai na FK — matlab abhi banane layak kuch nahi hai.
+- **PROJECT MEIN EXTRA**: `user_entity_type`, `user_entity_id` — user ko MGA/broker/customer entity se polymorphic link karne ke liye. Diagram ka note saaf kehta hai ye **hataye gaye** kyunki "Southlake internal-only hai... access sirf role/permissions se control hota hai." Project abhi bhi ye dono columns actively use karta hai.
 
 ### `permissions` — CHANGED
-- **MISSING IN PROJECT**: `is_deleted`, `deleted_at`, `deleted_by` (project's `permissions` table has no soft-delete at all).
+- **PROJECT MEIN MISSING**: `is_deleted`, `deleted_at`, `deleted_by` (project ki `permissions` table mein koi soft-delete hai hi nahi).
 
 ### `modules` — CHANGED
-- **MISSING IN PROJECT**: `is_deleted`, `deleted_at`, `deleted_by`.
+- **PROJECT MEIN MISSING**: `is_deleted`, `deleted_at`, `deleted_by`.
 
 ### `submodules` — CHANGED
-- **MISSING IN PROJECT**: `is_deleted`, `deleted_at`, `deleted_by`.
+- **PROJECT MEIN MISSING**: `is_deleted`, `deleted_at`, `deleted_by`.
 
 ### `role_permissions` — CHANGED
-- **MISSING IN PROJECT**: `is_deleted`, `deleted_at`, `deleted_by`.
+- **PROJECT MEIN MISSING**: `is_deleted`, `deleted_at`, `deleted_by`.
 
 ### `user_permissions` — CHANGED
-- **MISSING IN PROJECT**: `is_deleted`, `deleted_at`, `deleted_by`.
+- **PROJECT MEIN MISSING**: `is_deleted`, `deleted_at`, `deleted_by`.
 
 ### `user_sessions` — CHANGED
-- **MISSING IN PROJECT**: `is_deleted`, `deleted_at`, `deleted_by`.
+- **PROJECT MEIN MISSING**: `is_deleted`, `deleted_at`, `deleted_by`.
 
 ### `login_challenges` — CHANGED
-- **MISSING IN PROJECT**: `is_deleted`, `deleted_at`, `deleted_by`.
+- **PROJECT MEIN MISSING**: `is_deleted`, `deleted_at`, `deleted_by`.
 
 ### `login_otps` — CHANGED
-- **MISSING IN PROJECT**: `is_deleted`, `deleted_at`, `deleted_by`.
+- **PROJECT MEIN MISSING**: `is_deleted`, `deleted_at`, `deleted_by`.
 
 ### `pending_invites` — CHANGED
-- **MISSING IN PROJECT**: `is_deleted`, `deleted_at`, `deleted_by`.
-- **EXTRA IN PROJECT**: `user_entity_type`, `user_entity_id` — same story as `users` above; diagram removed these, project still has them.
+- **PROJECT MEIN MISSING**: `is_deleted`, `deleted_at`, `deleted_by`.
+- **PROJECT MEIN EXTRA**: `user_entity_type`, `user_entity_id` — `users` wali same story; diagram ne hataye, project mein abhi bhi hain.
 
 ### `activity_logs` — CHANGED
-- **MISSING IN PROJECT**: `is_deleted`, `deleted_at`, `deleted_by`.
-- **EXTRA IN PROJECT**: `changes` (jsonb) — field-level diff tracking `[{ field, oldValue, newValue }]`. Not present in `diagram.dbml` at all.
-- **RENAMED/CHANGED**: `entity_id` is `varchar` in the project vs `uuid` in the diagram (both are documented as a polymorphic reference with no real FK constraint).
+- **PROJECT MEIN MISSING**: `is_deleted`, `deleted_at`, `deleted_by`.
+- **PROJECT MEIN EXTRA**: `changes` (jsonb) — field-level diff track karta hai `[{ field, oldValue, newValue }]`. `diagram.dbml` mein ye field hai hi nahi.
+- **RENAME/CHANGE HUA**: `entity_id` project mein `varchar` hai vs diagram mein `uuid` (dono jagah ye polymorphic reference hai bina real FK constraint ke).
 
-> **Pattern across this whole group**: `diagram.dbml` adds `is_deleted/deleted_at/deleted_by` to almost every auth/RBAC table (`permissions`, `modules`, `submodules`, `role_permissions`, `user_permissions`, `user_sessions`, `login_challenges`, `login_otps`, `pending_invites`, `activity_logs`) that the project currently does NOT soft-delete. If you want full soft-delete coverage to match the target design, these 9 tables need the 3 columns added + service-layer changes to filter `is_deleted = false` and to soft-delete instead of hard-delete.
+> **Pura group ka pattern**: `diagram.dbml` bijli almost har auth/RBAC table (`permissions`, `modules`, `submodules`, `role_permissions`, `user_permissions`, `user_sessions`, `login_challenges`, `login_otps`, `pending_invites`, `activity_logs`) mein `is_deleted/deleted_at/deleted_by` add karta hai, jo project abhi soft-delete NAHI karta. Agar target design ke hisaab se full soft-delete coverage chahiye, toh in 9 tables mein 3 columns add karne padenge + service-layer mein `is_deleted = false` filter aur hard-delete ki jagah soft-delete karna hoga. (Upar wala "IMPORTANT CLARIFICATION" section dekho — `SoftDeleteEntity` base class already ban chuka hai, bas use ho nahi raha.)
 
 ---
 
@@ -83,71 +116,71 @@ Identical field set in both files.
 *(project module: `masters`, plus `document_type_master`/`state_master`/etc.)*
 
 ### `document_type_master` — CHANGED
-- **RENAMED/CHANGED**: project's `code` ↔ diagram's `type_code` (same purpose).
-- **MISSING IN PROJECT**: `created_by`, `updated_by`.
-- **EXTRA IN PROJECT**: `description`.
+- **RENAME/CHANGE HUA**: project ka `code` ↔ diagram ka `type_code` (same purpose).
+- **PROJECT MEIN MISSING**: `created_by`, `updated_by`.
+- **PROJECT MEIN EXTRA**: `description`.
 
-### `sequence_prefix_master` — REDESIGNED
-- **MISSING IN PROJECT**: `sequence_type` ('policy'|'claim'), `prefix_connector`, `seq_start`, `suffix`, `suffix_connector`, `created_by`, `updated_by`.
-- **EXTRA IN PROJECT**: `code`, `next_value` (diagram's equivalent is `next_number`), `padding_width`, `description`.
-- This table is one of the most reshaped in the whole schema — diagram builds a full "prefix + running number + suffix" numbering scheme (e.g. `POL-000123-CA`); the project's version is a much simpler prefix/next-value counter with a `padding_width` for zero-padding instead.
+### `sequence_prefix_master` — PURA REDESIGN
+- **PROJECT MEIN MISSING**: `sequence_type` ('policy'|'claim'), `prefix_connector`, `seq_start`, `suffix`, `suffix_connector`, `created_by`, `updated_by`.
+- **PROJECT MEIN EXTRA**: `code`, `next_value` (diagram ka equivalent `next_number` hai), `padding_width`, `description`.
+- Pure schema mein sabse zyada reshape hui table yahi hai — diagram ek full "prefix + running number + suffix" numbering scheme banata hai (jaise `POL-000123-CA`); project ka version bahut simple prefix/next-value counter hai jisme zero-padding ke liye `padding_width` hai.
 
-### `state_master` — no differences
+### `state_master` — koi farak nahi
 
 ### `state_documents` — CHANGED
-- **MISSING IN PROJECT**: `document_type_id` (proper FK to `document_type_master`).
-- **EXTRA IN PROJECT**: `document_type` (plain varchar, no FK enforced).
-- *(See the "document_type vs document_type_id" note at the end of this group — this pattern repeats across several `*_documents` tables.)*
+- **PROJECT MEIN MISSING**: `document_type_id` (proper FK `document_type_master` ki taraf).
+- **PROJECT MEIN EXTRA**: `document_type` (plain varchar, koi FK enforce nahi hai).
+- *(Is group ke aakhir mein "document_type vs document_type_id" wala note dekho — ye pattern kayi `*_documents` tables mein repeat hota hai.)*
 
 ### `mga_master` — CHANGED
-- **MISSING IN PROJECT**: nothing new (diagram removed a field, doesn't add one — see below).
-- **EXTRA IN PROJECT**: `tax_payable_inhouse` (diagram comments this field out / removes it), `other_names` (jsonb — diagram's note explicitly says this was "normalized out to `mga_other_names`", i.e. this jsonb column is redundant now that the `mga_other_names` table already exists in the project too), `naics_code`, `contact_name`, `contact_email`, `contact_phone` (diagram moves these into the dedicated `mga_contact_master` table instead of storing a single contact on the MGA record itself).
+- **PROJECT MEIN MISSING**: kuch naya nahi (diagram ne field hataya hai, add nahi kiya — neeche dekho).
+- **PROJECT MEIN EXTRA**: `tax_payable_inhouse` (diagram isse comment-out/remove karta hai), `other_names` (jsonb — diagram ka note saaf kehta hai ye "`mga_other_names` mein normalize ho chuka hai", matlab ye jsonb column redundant hai kyunki `mga_other_names` table project mein pehle se hi maujood hai), `naics_code`, `contact_name`, `contact_email`, `contact_phone` (diagram inhe alag `mga_contact_master` table mein daal deta hai, MGA record pe ek single contact rakhne ki jagah).
 
 ### `mga_other_names` — CHANGED
-- **MISSING IN PROJECT**: `state_id` (diagram scopes each alternate name to a specific state).
-- **RENAMED/CHANGED**: project's `name` ↔ diagram's `display_name`.
+- **PROJECT MEIN MISSING**: `state_id` (diagram har alternate name ko ek specific state se scope karta hai).
+- **RENAME/CHANGE HUA**: project ka `name` ↔ diagram ka `display_name`.
 
 ### `mga_documents` — CHANGED
-- **MISSING IN PROJECT**: `document_type_id`.
-- **EXTRA IN PROJECT**: `document_type` (plain varchar).
+- **PROJECT MEIN MISSING**: `document_type_id`.
+- **PROJECT MEIN EXTRA**: `document_type` (plain varchar).
 
-### `contact_domain_master` — REDESIGNED (same table name, different purpose entirely)
-- Project's version: **per-MGA whitelist of email domains** (`mga_id`, `domain_name`) used to validate customer-portal signups.
-- Diagram's version: **global lookup of functional contact departments** (`domain_code`, `name` — e.g. Underwriting, Claims, Accounting, Compliance, IT, General), referenced by `mga_contact_master.domain_id`.
-- **MISSING IN PROJECT**: `domain_code`.
-- **EXTRA IN PROJECT**: `mga_id`, `domain_name`.
-- Flag this one specifically — it's not a field tweak, it's a completely different table hiding behind the same name.
+### `contact_domain_master` — PURA REDESIGN (same table name, purpose bilkul alag)
+- Project ka version: **har MGA ke liye allowed email domains ki whitelist** (`mga_id`, `domain_name`) — customer-portal signup validate karne ke liye.
+- Diagram ka version: **functional contact departments ka global lookup** (`domain_code`, `name` — jaise Underwriting, Claims, Accounting, Compliance, IT, General), jise `mga_contact_master.domain_id` reference karta hai.
+- **PROJECT MEIN MISSING**: `domain_code`.
+- **PROJECT MEIN EXTRA**: `mga_id`, `domain_name`.
+- Isko specifically flag karna zaroori hai — ye field tweak nahi hai, same naam ke peeche puri alag table chhupi hai.
 
 ### `mga_contact_master` — CHANGED
-- **MISSING IN PROJECT**: `domain_id` (FK to `contact_domain_master`, only meaningful once that table's redesign above is applied), `designation`, `mobile`, `notes`.
-- **RENAMED/CHANGED**: project's `contact_email`/`contact_phone` ↔ diagram's `email`/`phone`.
+- **PROJECT MEIN MISSING**: `domain_id` (FK `contact_domain_master` ki taraf — sirf tab meaningful hoga jab upar wala redesign apply ho), `designation`, `mobile`, `notes`.
+- **RENAME/CHANGE HUA**: project ka `contact_email`/`contact_phone` ↔ diagram ka `email`/`phone`.
 
-### `carriers` — no differences
+### `carriers` — koi farak nahi
 
 ### `carrier_documents` — CHANGED
-- **RENAMED/CHANGED**: project's `risk_company_id` ↔ diagram's `carrier_id` (same FK target, `carriers.id`).
-- **EXTRA IN PROJECT**: project actually has BOTH `document_type` (varchar) AND `document_type_id` (uuid) — the diagram only wants `document_type_id`. The leftover `document_type` varchar column looks like dead/legacy data worth checking for usage.
+- **RENAME/CHANGE HUA**: project ka `risk_company_id` ↔ diagram ka `carrier_id` (same FK target, `carriers.id`).
+- **PROJECT MEIN EXTRA**: project mein actually DONO hain — `document_type` (varchar) AND `document_type_id` (uuid) — diagram sirf `document_type_id` chahta hai. Bacha hua `document_type` varchar column legacy leftover lag raha hai — code mein check karo ye kahin use ho raha hai ya nahi, phir hataya ja sakta hai.
 
-### `reinsurer_companies` — no differences
+### `reinsurer_companies` — koi farak nahi
 
-### `broker_master` — REDESIGNED (project is missing a lot)
-- **MISSING IN PROJECT**: `license_number`, `company_id`, `id_name`, `address`, `city`, `state`, `zip`, `commission_pct`, `notes`, `created_by`, `updated_by`.
-- **RENAMED/CHANGED**: project's `contact_email`/`contact_phone` ↔ diagram's `email`/`phone`.
-- This is one of the biggest gaps in the Masters group — the diagram's broker record is much richer (address, license, commission %) than what's actually implemented.
+### `broker_master` — PURA REDESIGN (project mein bahut kuch missing hai)
+- **PROJECT MEIN MISSING**: `license_number`, `company_id`, `id_name`, `address`, `city`, `state`, `zip`, `commission_pct`, `notes`, `created_by`, `updated_by`.
+- **RENAME/CHANGE HUA**: project ka `contact_email`/`contact_phone` ↔ diagram ka `email`/`phone`.
+- Masters group ka sabse bada gap yahi hai — diagram ka broker record (address, license, commission %) actual implementation se kaafi zyada rich hai.
 
-### `broker_documents` — no field differences
-Both use `document_type_id` (FK not enforced at the DB level in the project, but the column exists and is named the same).
+### `broker_documents` — field mein koi farak nahi
+Dono jagah `document_type_id` use hota hai (project mein FK level pe enforce nahi hai, par column same naam se maujood hai).
 
-### `lines_of_business` — no differences
-### `cob_master` — no differences
+### `lines_of_business` — koi farak nahi
+### `cob_master` — koi farak nahi
 
-### `product_master` — REDESIGNED
-- **MISSING IN PROJECT**: `created_by`, `updated_by`.
-- **RENAMED/CHANGED**: project's `product_id` ↔ diagram's `product_code`.
-- **EXTRA IN PROJECT**: `lob_id`, `cob_id` (direct FK columns), `description`. Diagram's note is explicit: *"Carrier and MGA are assigned at the treaty level, not here"* and LOB/COB are meant to flow ONLY through the `product_lobs`/`product_cobs` many-to-many junctions. The project keeps both — a direct single `lob_id`/`cob_id` on the product AND the junction tables — which is a redundant/conflicting design worth resolving one way or the other.
+### `product_master` — PURA REDESIGN
+- **PROJECT MEIN MISSING**: `created_by`, `updated_by`.
+- **RENAME/CHANGE HUA**: project ka `product_id` ↔ diagram ka `product_code`.
+- **PROJECT MEIN EXTRA**: `lob_id`, `cob_id` (direct FK columns), `description`. Diagram ka note saaf kehta hai: *"Carrier and MGA are assigned at the treaty level, not here"* aur LOB/COB sirf `product_lobs`/`product_cobs` many-to-many junctions ke through flow karne chahiye. Project mein dono hain — direct single `lob_id`/`cob_id` product pe AND junction tables bhi — ye redundant/conflicting design hai, kisi ek tarike se resolve karna chahiye.
 
 ### `product_lobs` / `product_cobs` — CHANGED
-- **MISSING IN PROJECT**: unique index `(product_id, lob_id)` / `(product_id, cob_id)`. Without it, the project can insert duplicate junction rows for the same product+LOB (or product+COB) pair.
+- **PROJECT MEIN MISSING**: unique index `(product_id, lob_id)` / `(product_id, cob_id)`. Iske bina project mein same product+LOB (ya product+COB) pair ke duplicate junction rows insert ho sakte hain.
 
 ---
 
@@ -155,101 +188,101 @@ Both use `document_type_id` (FK not enforced at the DB level in the project, but
 *(project module: `masters`, treaty-related tables)*
 
 ### `treaty_type_master` — CHANGED
-- **EXTRA IN PROJECT**: `description` (not in diagram).
+- **PROJECT MEIN EXTRA**: `description` (diagram mein nahi hai).
 
-### `treaties` — REDESIGNED (the single biggest area of drift in the whole schema)
-- **MISSING IN PROJECT**: `treaty_type_id` (proper FK to `treaty_type_master` — the project instead stores a plain `treaty_type` varchar defaulting to `'Quota Share'` with no FK at all), `carrier_allocation_type` ('single'|'percentage' — the flag that decides whether to use `treaties.risk_company_id` directly or look up `treaty_state_carriers` per state), `loss_pick_pct`.
-- **EXTRA IN PROJECT**: `reinsurer_id` (diagram removed the single treaty-level reinsurer column — reinsurers are meant to live ONLY in `treaty_reinsurers`), `carrier_retention_pct`, `reinsurer_cession_pct` (diagram moved these to `treaty_state_carriers.pct` / `treaty_reinsurers.quota_share`), `is_active` (diagram removes this — treaty status is meant to be derived from `effective_date`/`expiration_date` instead of a stored flag), `policy_seq_prefix`, `policy_seq_start`, `policy_seq_next`, `claim_seq_prefix`, `claim_seq_start`, `claim_seq_next` (diagram removed all six — sequence numbering is meant to flow entirely through the `treaty_sequence_prefixes` junction + `sequence_prefix_master`, not be duplicated onto the treaty row).
-- **RENAMED/CHANGED**: project's `treaty_type` (varchar, no FK) is the same concept as diagram's `treaty_type_id` (uuid FK) but implemented completely differently.
-- This table currently mixes the "old" design (direct reinsurer/sequence/retention columns) with the "new" junction-table design (which the project also has fully built: `treaty_reinsurers`, `treaty_sequence_prefixes`, `treaty_state_carriers` all exist) — meaning the project is running both patterns side by side right now.
+### `treaties` — PURA REDESIGN (poore schema mein sabse bada drift yahi hai)
+- **PROJECT MEIN MISSING**: `treaty_type_id` (proper FK `treaty_type_master` ki taraf — project ki jagah ek plain `treaty_type` varchar rakhta hai jo default `'Quota Share'` hai, koi FK nahi), `carrier_allocation_type` ('single'|'percentage' — ye flag decide karta hai ki `treaties.risk_company_id` direct use karna hai ya per-state `treaty_state_carriers` dekhna hai), `loss_pick_pct`.
+- **PROJECT MEIN EXTRA**: `reinsurer_id` (diagram ne single treaty-level reinsurer column hata diya — reinsurers ab sirf `treaty_reinsurers` mein rehne chahiye), `carrier_retention_pct`, `reinsurer_cession_pct` (diagram ne inhe `treaty_state_carriers.pct` / `treaty_reinsurers.quota_share` mein shift kar diya), `is_active` (diagram isse hata deta hai — treaty ka status `effective_date`/`expiration_date` se derive hona chahiye, stored flag se nahi), `policy_seq_prefix`, `policy_seq_start`, `policy_seq_next`, `claim_seq_prefix`, `claim_seq_start`, `claim_seq_next` (diagram ne saare 6 hata diye — sequence numbering ab poori tarah `treaty_sequence_prefixes` junction + `sequence_prefix_master` ke through flow honi chahiye, treaty row pe duplicate nahi honi chahiye).
+- **RENAME/CHANGE HUA**: project ka `treaty_type` (varchar, no FK) wahi concept hai jo diagram ka `treaty_type_id` (uuid FK) hai, bas implementation bilkul alag hai.
+- Ye table abhi "purana" design (direct reinsurer/sequence/retention columns) aur "naya" junction-table design — dono ek saath carry kar rahi hai (project mein `treaty_reinsurers`, `treaty_sequence_prefixes`, `treaty_state_carriers` sab already ban chuke hain). Matlab dono patterns ek saath chal rahe hain abhi — confirm karna padega application code actually kaunsa read karta hai.
 
 ### `treaty_products` — CHANGED
-- **MISSING IN PROJECT**: unique index `(treaty_id, product_id)`.
+- **PROJECT MEIN MISSING**: unique index `(treaty_id, product_id)`.
 
 ### `treaty_states` — CHANGED
-- **MISSING IN PROJECT**: `is_deleted`, `deleted_at`, `deleted_by`.
+- **PROJECT MEIN MISSING**: `is_deleted`, `deleted_at`, `deleted_by`.
 
 ### `treaty_state_carriers` — CHANGED
-- **RENAMED/CHANGED**: project's `risk_company_id` ↔ diagram's `carrier_id`; project's `retention_pct` ↔ diagram's `pct`.
-- **MISSING IN PROJECT**: unique index `(treaty_id, state_id, carrier_id)`; also project's `state_id` is nullable while diagram requires it `not null`.
-- **EXTRA IN PROJECT**: `broker_id` — diagram's redesigned junction has no broker reference here at all.
+- **RENAME/CHANGE HUA**: project ka `risk_company_id` ↔ diagram ka `carrier_id`; project ka `retention_pct` ↔ diagram ka `pct`.
+- **PROJECT MEIN MISSING**: unique index `(treaty_id, state_id, carrier_id)`; saath hi project mein `state_id` nullable hai jabki diagram mein `not null` required hai.
+- **PROJECT MEIN EXTRA**: `broker_id` — diagram ke redesigned junction mein koi broker reference hai hi nahi.
 
 ### `treaty_mgas` — CHANGED
-- **MISSING IN PROJECT**: `is_deleted`, `deleted_at`, `deleted_by`.
+- **PROJECT MEIN MISSING**: `is_deleted`, `deleted_at`, `deleted_by`.
 
 ### `treaty_reinsurers` — CHANGED
-- **RENAMED/CHANGED**: project's `cession_pct` ↔ diagram's `quota_share` (diagram's note literally says *"was cession_pct"* — confirmed rename).
-- **MISSING IN PROJECT**: `is_deleted`, `deleted_at`, `deleted_by`.
-- **EXTRA IN PROJECT**: `state_id`, `broker_id` — diagram's simplified version has neither.
+- **RENAME/CHANGE HUA**: project ka `cession_pct` ↔ diagram ka `quota_share` (diagram ka note literally kehta hai *"was cession_pct"* — rename confirm hai).
+- **PROJECT MEIN MISSING**: `is_deleted`, `deleted_at`, `deleted_by`.
+- **PROJECT MEIN EXTRA**: `state_id`, `broker_id` — diagram ka simplified version dono mein se koi nahi rakhta.
 
 ### `treaty_sequence_prefixes` — CHANGED
-- **MISSING IN PROJECT**: unique index `(treaty_id, sequence_prefix_id)`.
+- **PROJECT MEIN MISSING**: unique index `(treaty_id, sequence_prefix_id)`.
 
-### `treaty_lobs`, `treaty_lob_cobs` — see Section 0 (only exist in the project; diagram replaced both with `treaty_products`)
+### `treaty_lobs`, `treaty_lob_cobs` — Section 0 dekho (sirf project mein hain; diagram ne dono `treaty_products` se replace kar diye)
 
 ---
 
 ## GROUP 4: Workbook / Excel Import
 *(project module: `workbook`)*
 
-### `workbooks` — no differences
-### `state_exhibits` — no differences
+### `workbooks` — koi farak nahi
+### `state_exhibits` — koi farak nahi
 
-Both tables match field-for-field, including the project-wide-inconsistent camelCase column naming (`monthKey`, `isDeleted`, etc.), which `diagram.dbml` explicitly preserves on purpose (see its comment: *"do NOT convert to snake_case"*).
+Dono tables field-for-field match karti hain, project-wide camelCase column naming (`monthKey`, `isDeleted`, etc.) samet — jise `diagram.dbml` jaan-boojh kar preserve karta hai (uska comment: *"do NOT convert to snake_case"*).
 
 ---
 
 ## GROUP 5: Accounting (GL)
 *(project modules: `chart-of-accounts`, `gl-mappings`, `journal-entries`, `reports`, plus `cash_settlements` from `workbook`)*
 
-### `chart_of_accounts` — no differences
-### `gl_mappings` — no differences
+### `chart_of_accounts` — koi farak nahi
+### `gl_mappings` — koi farak nahi
 
 ### `chart_of_account_documents` — CHANGED
-- **MISSING IN PROJECT**: `document_type_id`.
-- **EXTRA IN PROJECT**: `document_type` (plain varchar, no FK).
+- **PROJECT MEIN MISSING**: `document_type_id`.
+- **PROJECT MEIN EXTRA**: `document_type` (plain varchar, no FK).
 
-### `journal_entry_batches` — REDESIGNED
-- **MISSING IN PROJECT**: `approved_at`, `approved_by` (diagram tracks an explicit approval workflow step that the project doesn't have).
-- **EXTRA IN PROJECT**: `month_key`, `state_code`.
-- **RENAMED/CHANGED**: `workbook_id` is `integer` in the project (matches `workbooks.id`, which is an integer PK) but `uuid` in the diagram — likely an oversight in the diagram, since `workbooks.id` is an integer everywhere else in that same file.
-- Default `status` differs: project defaults to `'posted'`, diagram defaults to `'pending_review'` — this reflects two different assumed workflows (diagram expects a review/approval step before a batch is posted; the project currently posts directly).
-- `treaty_id` and `workbook_id` are plain columns with no FK constraint in the project; diagram enforces both as real foreign keys (`treaty_id` additionally `not null`).
+### `journal_entry_batches` — PURA REDESIGN
+- **PROJECT MEIN MISSING**: `approved_at`, `approved_by` (diagram ek explicit approval workflow step track karta hai jo project mein nahi hai).
+- **PROJECT MEIN EXTRA**: `month_key`, `state_code`.
+- **RENAME/CHANGE HUA**: `workbook_id` project mein `integer` hai (kyunki `workbooks.id` integer PK hai) but diagram mein `uuid` hai — ye diagram ki apni file ke andar hi ek inconsistency lagti hai, kyunki `workbooks.id` waha bhi integer hi hai.
+- Default `status` alag hai: project `'posted'` default rakhta hai, diagram `'pending_review'` — do alag workflows dikhate hain (diagram batch post hone se pehle review/approval step expect karta hai; project abhi direct post kar deta hai).
+- `treaty_id` aur `workbook_id` project mein plain columns hain bina FK constraint ke; diagram dono ko real foreign keys banata hai (`treaty_id` additionally `not null`).
 
-### `journal_entry_drafts` — REDESIGNED (very different shape)
-- **MISSING IN PROJECT**: `je_number`, `coa_id` (FK), `state_id`, `product_id`, `sub`, `date`, `dp`, `policy`, `memo`, `created_by`, `updated_at`, `updated_by`.
-- **EXTRA IN PROJECT**: `account_code`, `account_name` (the project stores raw account code/name strings on the draft instead of a `coa_id` FK).
-- This is effectively a different, much simpler table in the project today — the diagram's version mirrors the full `journal_entries` shape (GL account link, state, product, memo fields, etc.) so that drafts can be edited in place before being copied into `journal_entries` on approval; the project's draft table can't currently carry that much information.
+### `journal_entry_drafts` — PURA REDESIGN (bahut alag shape)
+- **PROJECT MEIN MISSING**: `je_number`, `coa_id` (FK), `state_id`, `product_id`, `sub`, `date`, `dp`, `policy`, `memo`, `created_by`, `updated_at`, `updated_by`.
+- **PROJECT MEIN EXTRA**: `account_code`, `account_name` (project draft pe raw account code/name strings rakhta hai, `coa_id` FK ki jagah).
+- Ye effectively ek alag, bahut simple table hai project mein abhi — diagram ka version poori `journal_entries` shape mirror karta hai (GL account link, state, product, memo fields, etc.) taaki drafts ko approval se pehle edit kiya ja sake; project ka draft table itni saari info carry nahi kar sakta abhi.
 
 ### `journal_entries` — CHANGED
-- **MISSING IN PROJECT**: `state_id`, `product_id` (diagram links every GL line to a state and a product for reporting/filtering), `is_deleted`, `deleted_at`, `deleted_by` (the project's `journal_entries` has no soft-delete columns at all — posted GL lines can only be hard-deleted).
+- **PROJECT MEIN MISSING**: `state_id`, `product_id` (diagram har GL line ko ek state aur product se link karta hai reporting/filtering ke liye), `is_deleted`, `deleted_at`, `deleted_by` (project ki `journal_entries` mein koi soft-delete columns hai hi nahi — posted GL lines sirf hard-delete ho sakti hain).
 
-### `calculation_report_lines` — REDESIGNED (essentially a different table under the same name)
-- **MISSING IN PROJECT**: `batch_id` (FK), `state_id`, `is_total`, `coa_id` (FK), `line_item`, `amount`, `created_at`, `updated_at`.
-- **EXTRA IN PROJECT**: `treaty_id`, `line_number`, `line_label`, `formula_expression`, `is_bold`.
-- Project's version is a **configurable formula/label template per treaty** (used to define how a report line should be computed/displayed). Diagram's version is a **computed numeric result row per batch+state**, directly linked to a GL account, with a boolean flag for the Total row. These solve different problems — this isn't a simple field diff, it's two unrelated designs sharing a table name.
+### `calculation_report_lines` — PURA REDESIGN (practically same naam ke peeche alag table)
+- **PROJECT MEIN MISSING**: `batch_id` (FK), `state_id`, `is_total`, `coa_id` (FK), `line_item`, `amount`, `created_at`, `updated_at`.
+- **PROJECT MEIN EXTRA**: `treaty_id`, `line_number`, `line_label`, `formula_expression`, `is_bold`.
+- Project ka version ek **configurable formula/label template hai per treaty** (report line kaise compute/display honi chahiye, wo define karta hai). Diagram ka version ek **computed numeric result row hai per batch+state**, direct GL account se linked, Total row ke liye ek boolean flag ke saath. Dono alag problems solve karte hain — ye simple field diff nahi hai, do unrelated designs hain jo ek table naam share kar rahe hain.
 
 ### `treaty_itd_totals` — CHANGED
-- **MISSING IN PROJECT**: unique index `(treaty_id, year, month, state_id)`. All the numeric metric columns themselves match exactly between both files.
-- FKs (`treaty_id`, `state_id`) are enforced in the diagram but only logical (no DB constraint) in the project.
+- **PROJECT MEIN MISSING**: unique index `(treaty_id, year, month, state_id)`. Baaki saare numeric metric columns dono files mein exactly match karte hain.
+- FKs (`treaty_id`, `state_id`) diagram mein enforce hain but project mein sirf logical hain (koi DB constraint nahi).
 
-### `cash_settlements` — REDESIGNED (different relationship model, not just fields)
-- **Project**: one-to-one with `workbooks` — `workbookId` is `not null` + `unique` and is what drives the relationship ("one settlement summary per workbook upload"). `batch_id` and `reinsurer_id` are nullable with no FK.
-- **Diagram**: one row per (batch, reinsurer) — `batch_id` and `reinsurer_id` are `not null` FKs with a unique constraint on `(batch_id, reinsurer_id)`, while `workbookId` is just an optional "raw upload trace" field.
-- This means the diagram expects **multiple cash-settlement rows per workbook** (one per reinsurer on that treaty), while the project's actual schema only allows **one row per workbook total**. If a treaty ever has more than one reinsurer, the current schema cannot represent a separate settlement per reinsurer — worth checking against how `cash_settlements` is actually being written in the reserves/financial-reports code.
+### `cash_settlements` — PURA REDESIGN (relationship model hi alag hai, sirf fields nahi)
+- **Project**: `workbooks` ke saath one-to-one — `workbookId` `not null` + `unique` hai aur yehi relationship drive karta hai ("ek workbook upload ka ek hi settlement summary"). `batch_id` aur `reinsurer_id` nullable hain, koi FK nahi.
+- **Diagram**: har (batch, reinsurer) ke liye ek row — `batch_id` aur `reinsurer_id` `not null` FKs hain, saath mein unique constraint `(batch_id, reinsurer_id)` pe, jabki `workbookId` sirf ek optional "raw upload trace" field hai.
+- Matlab diagram expect karta hai ki **ek workbook ke multiple cash-settlement rows ho sakte hain** (treaty ke har reinsurer ke liye alag), jabki project ka actual schema sirf **ek workbook = ek row total** allow karta hai. Agar kisi treaty mein ek se zyada reinsurer hue, toh current schema alag-alag reinsurer ke liye alag settlement represent nahi kar sakta — reserves/financial-reports code mein check karo `cash_settlements` actually kaise likha ja raha hai.
 
 ---
 
-## Cross-cutting patterns worth checking in code
+## Cross-cutting patterns — code mein zaroor check karo
 
-1. **`document_type` (varchar) vs `document_type_id` (FK)** — inconsistent across the project itself, not just vs. the diagram:
-   - Uses plain `document_type` varchar (no FK): `state_documents`, `mga_documents`, `chart_of_account_documents`
-   - Uses `document_type_id` FK-style column already: `broker_documents`
-   - Uses BOTH columns: `carrier_documents` (likely legacy leftover — check if `document_type` is still read/written anywhere before removing it)
-   - The diagram standardizes everything on `document_type_id` referencing `document_type_master`.
+1. **`document_type` (varchar) vs `document_type_id` (FK)** — ye project ke andar hi inconsistent hai, sirf diagram ke against nahi:
+   - Plain `document_type` varchar use karte hain (koi FK nahi): `state_documents`, `mga_documents`, `chart_of_account_documents`
+   - `document_type_id` FK-style column already hai: `broker_documents`
+   - DONO columns hain: `carrier_documents` (shayad legacy leftover — pehle check karo `document_type` kahin read/write toh nahi ho raha, phir hi hatao)
+   - Diagram sabko `document_type_id` pe standardize karta hai, jo `document_type_master` ko reference karta hai.
 
-2. **Soft-delete coverage gap** — 9 tables in Group 1 (Auth & RBAC) plus `treaty_states`, `treaty_mgas`, `treaty_reinsurers`, and `journal_entries` have no `is_deleted/deleted_at/deleted_by` in the project even though nearly every other table follows that convention. Confirm whether rows in these tables are ever hard-deleted today.
+2. **Soft-delete coverage gap** — Group 1 (Auth & RBAC) ke 9 tables plus `treaty_states`, `treaty_mgas`, `treaty_reinsurers`, aur `journal_entries` mein `is_deleted/deleted_at/deleted_by` hai hi nahi, jabki almost baaki saari tables is convention ko follow karti hain. (Reason upar "IMPORTANT CLARIFICATION" section mein hai — `SoftDeleteEntity` base class bana toh hai par kahin extend nahi hota, isliye ye gap consistent hai.) Confirm karo ki in tables ki rows abhi hard-delete toh nahi ho rahi.
 
-3. **Old vs. new treaty design running side by side** — the project has fully built the "new" junction-table pattern (`treaty_reinsurers`, `treaty_state_carriers`, `treaty_sequence_prefixes`, `treaty_products`) that the diagram is designed around, but `treaties` itself still carries the "old" columns (`reinsurer_id`, `carrier_retention_pct`, `reinsurer_cession_pct`, `policy_seq_prefix/start/next`, `claim_seq_prefix/start/next`, `is_active`) that the new design was supposed to replace. Worth confirming which one the application code actually reads from today.
+3. **Treaty ka purana vs naya design ek saath chal raha hai** — project ne "naya" junction-table pattern (`treaty_reinsurers`, `treaty_state_carriers`, `treaty_sequence_prefixes`, `treaty_products`) pura bana liya hai jispe diagram design based hai, lekin `treaties` table khud abhi bhi "purane" columns carry kar rahi hai (`reinsurer_id`, `carrier_retention_pct`, `reinsurer_cession_pct`, `policy_seq_prefix/start/next`, `claim_seq_prefix/start/next`, `is_active`) jinhe naye design mein replace hona tha. Confirm karna padega application code actually kaunsa padhta hai.
 
-4. **Missing unique constraints** — `product_lobs`, `product_cobs`, `treaty_products`, `treaty_state_carriers`, `treaty_sequence_prefixes`, `treaty_itd_totals` are all missing composite unique indexes that the diagram defines, meaning duplicate junction/fact rows are not currently prevented at the DB level.
+4. **Missing unique constraints** — `product_lobs`, `product_cobs`, `treaty_products`, `treaty_state_carriers`, `treaty_sequence_prefixes`, `treaty_itd_totals` — in sab mein diagram wale composite unique indexes missing hain, matlab abhi DB level pe duplicate junction/fact rows rukte nahi hain.
