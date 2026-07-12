@@ -74,6 +74,58 @@ npm run migration:run
 
 ---
 
+## SCENARIO C — Table ka naam rename karte waqt (e.g. `broker_master` → `master_broker`)
+
+⚠️ **Ye sabse risky scenario hai — yahan `migration:generate` bilkul use MAT karo.**
+
+**Kyun risky hai:** Column-rename me TypeORM confuse hoke DROP+ADD kar deta hai (Scenario B dekho), lekin table-rename me ye problem aur bada ho jaata hai — `migration:generate` ko ye samajh hi nahi aata ki rename hua hai. Wo seedha ye generate kar dega:
+```sql
+DROP TABLE "broker_master";          -- SAB DATA + saari rows permanently delete
+CREATE TABLE "master_broker" (...);  -- bilkul khaali naya table
+```
+Isse existing broker data chala jayega, aur jo bhi dusre tables (`broker_licensed_states`, `treaty_state_carriers`, `treaty_reinsurers`) is table ko FK se reference karte hain, unke constraints bhi toot jayenge.
+
+**Step 1 — Entity me table name badlo**
+```ts
+@Entity('broker_master')   // pehle
+```
+→
+```ts
+@Entity('master_broker')   // isme badlo
+```
+
+**Step 2 — Manually migration likho** (auto-generate ki jagah empty stub banao)
+```
+npm run migration:create -- src/database/migrations/RenameBrokerMasterToMasterBroker
+```
+Andar khud likho:
+```ts
+import { MigrationInterface, QueryRunner } from 'typeorm';
+
+export class RenameBrokerMasterToMasterBroker1783xxxxxxxxx implements MigrationInterface {
+  name = 'RenameBrokerMasterToMasterBroker1783xxxxxxxxx';
+
+  public async up(queryRunner: QueryRunner): Promise<void> {
+    await queryRunner.query(`ALTER TABLE "broker_master" RENAME TO "master_broker"`);
+  }
+
+  public async down(queryRunner: QueryRunner): Promise<void> {
+    await queryRunner.query(`ALTER TABLE "master_broker" RENAME TO "broker_master"`);
+  }
+}
+```
+`ALTER TABLE ... RENAME TO ...` se Postgres andar hi andar sab kuch (data, indexes, aur `broker_licensed_states`/`treaty_state_carriers`/`treaty_reinsurers` jaise tables ke FK constraints jo `broker_master(id)` ko point karte hain) automatically naye naam pe transfer kar deta hai — **kuch bhi tootega nahi, koi data loss nahi.**
+
+**Step 3 — Run karo**
+```
+npm run migration:run
+```
+
+**Step 4 — Extra check jo sirf table-rename me zaroori hai**
+Repo me kahin agar koi raw SQL string me `"broker_master"` hardcoded hai (seed scripts, custom `.query()` calls, kisi report/service me) — wahan bhi manually `master_broker` karna padega, kyunki wo ORM ke through nahi jaate. Normal `@InjectRepository(Broker)` wale saare service/DAO calls automatically theek rahenge (wo entity class ke through jaate hain, table-name string se nahi) — sirf raw SQL check karna kaafi hai.
+
+---
+
 ## Har scenario ke baad — verification steps (dono case me common)
 
 1. **Build check:**
